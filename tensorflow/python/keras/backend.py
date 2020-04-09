@@ -75,6 +75,7 @@ from tensorflow.python.ops.ragged import ragged_concat_ops
 from tensorflow.python.ops.ragged import ragged_tensor
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.training import moving_averages
+from tensorflow.python.training.tracking import util as tracking_util
 from tensorflow.python.util import nest
 from tensorflow.python.util import object_identity
 from tensorflow.python.util import tf_contextlib
@@ -544,6 +545,11 @@ def get_session(op_input_list=()):
     with session.graph.as_default():
       _initialize_variables(session)
   return session
+
+
+# Inject the get_session function to tracking_util to avoid the backward
+# dependency from TF to Keras.
+tracking_util.register_session_provider(get_session)
 
 
 def get_graph():
@@ -3290,11 +3296,11 @@ _VALUE_SET_CODE_STRING = """
 
   >>> v = tf.Variable(1.)
 
-  >>> _ = v.assign(2.)
+  >>> v.assign(2.)
   >>> print(v.numpy())
   2.0
 
-  >>> _ = v.assign_add(1.)
+  >>> v.assign_add(1.)
   >>> print(v.numpy())
   3.0"""[3:]  # Prune first newline and indent to match the docstring template.
 

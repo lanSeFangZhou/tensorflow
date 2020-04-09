@@ -35,6 +35,7 @@ cc_library(
     deps = [
         ":cpu_device_target",
         "//tensorflow/compiler/mlir/lite/quantization:quantization_config",
+        "//tensorflow/compiler/mlir/lite/quantization:quantization_context",
         "//tensorflow/compiler/mlir/lite/quantization:quantization_lib",
         "//tensorflow/compiler/mlir/xla:hlo",
         "//tensorflow/compiler/xla/client/lib:quantize",
@@ -60,6 +61,7 @@ cc_library(
     ],
     deps = [
         "//tensorflow/compiler/mlir/lite/quantization:device_target",
+        "//tensorflow/compiler/mlir/lite/quantization:quantization_context",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:QuantOps",
         "@llvm-project//mlir:Support",
@@ -75,6 +77,7 @@ cc_library(
         "quantize.h",
     ],
     deps = [
+        ":hlo_xla_quantization_passes",
         "//tensorflow/compiler/mlir/xla:hlo",
         "//tensorflow/compiler/mlir/xla:hlo_to_mlir_hlo",
         "//tensorflow/compiler/tf2xla",
@@ -85,8 +88,10 @@ cc_library(
         "//tensorflow/compiler/tf2xla/kernels:xla_ops",
         "//tensorflow/compiler/xla/client:xla_computation",
         "//tensorflow/core/platform:status",
+        "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:QuantOps",
         "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Transforms",
     ],

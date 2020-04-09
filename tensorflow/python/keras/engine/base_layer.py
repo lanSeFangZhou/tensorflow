@@ -104,6 +104,38 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   Users will just instantiate a layer and then treat it as a callable.
 
+  Arguments:
+    trainable: Boolean, whether the layer's variables should be trainable.
+    name: String name of the layer.
+    dtype: The dtype of the layer's computations and weights (default of
+      `None` means use `tf.keras.backend.floatx` in TensorFlow 2, or the type
+      of the first input in TensorFlow 1).
+    dynamic: Set this to `True` if your layer should only be run eagerly, and
+      should not be used to generate a static computation graph.
+      This would be the case for a Tree-RNN or a recursive network,
+      for example, or generally for any layer that manipulates tensors
+      using Python control flow. If `False`, we assume that the layer can
+      safely be used to generate a static computation graph.
+
+  Attributes:
+    name: The name of the layer (string).
+    dtype: The dtype of the layer's computations and weights. If mixed
+      precision is used with a `tf.keras.mixed_precision.experimental.Policy`,
+      this is instead just the dtype of the layer's weights, as the computations
+      are done in a different dtype.
+    losses: List of losses added to this layer (via `self.add_loss()`).
+    metrics: List of metrics added to this layer (via `self.add_metric()`)..
+    trainable_weights: List of variables to be included in backprop.
+    non_trainable_weights: List of variables that should not be
+      included in backprop.
+    weights: The concatenation of the lists trainable_weights and
+      non_trainable_weights (in this order).
+    trainable: Whether the layer should be trained (boolean), i.e. whether
+      its potentially-trainable weights should be returned as part of
+      `layer.trainable_weights`.
+    input_spec: Optional (list of) `InputSpec` object(s) specifying the
+      constraints on inputs that can be accepted by the layer.
+
   We recommend that descendants of `Layer` implement the following methods:
 
   * `__init__()`: Defines custom layer attributes, and creates layer state
@@ -223,35 +255,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   [Writing custom layers and models with Keras](
     https://www.tensorflow.org/guide/keras/custom_layers_and_models)
 
-  Arguments:
-    trainable: Boolean, whether the layer's variables should be trainable.
-    name: String name of the layer.
-    dtype: The dtype of the layer's computations and weights (default of
-      `None` means use `tf.keras.backend.floatx` in TensorFlow 2, or the type
-      of the first input in TensorFlow 1).
-    dynamic: Set this to `True` if your layer should only be run eagerly, and
-      should not be used to generate a static computation graph.
-      This would be the case for a Tree-RNN or a recursive network,
-      for example, or generally for any layer that manipulates tensors
-      using Python control flow. If `False`, we assume that the layer can
-      safely be used to generate a static computation graph.
-
-  Attributes:
-    name: The name of the layer (string).
-    dtype: The dtype of the layer's computations and weights. If mixed
-      precision is used with a `tf.keras.mixed_precision.experimental.Policy`,
-      this is instead just the dtype of the layer's weights, as the computations
-      are done in a different dtype.
-    updates: List of update ops of this layer.
-    losses: List of losses added by this layer.
-    trainable_weights: List of variables to be included in backprop.
-    non_trainable_weights: List of variables that should not be
-      included in backprop.
-    weights: The concatenation of the lists trainable_weights and
-      non_trainable_weights (in this order).
-    trainable: Whether the layer should be trained (boolean).
-    input_spec: Optional (list of) `InputSpec` object(s) specifying the
-      constraints on inputs that can be accepted by the layer.
+  About the layer's `dtype` attribute:
 
   Each layer has a dtype, which is typically the dtype of the layer's
   computations and variables. A layer's dtype can be queried via the
@@ -400,7 +404,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         `TensorShape` if the layer expects a list of inputs
         (one instance per input).
     """
-    # Only record the build input shapes of overridden the build methods.
+    # Only record the build input shapes of overridden build methods.
     if not hasattr(self.build, '_is_default'):
       self._build_input_shape = input_shape
     self.built = True
@@ -538,11 +542,11 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     if initializer is None:
       # If dtype is DT_FLOAT, provide a uniform unit scaling initializer
       if dtype.is_floating:
-        initializer = initializers.glorot_uniform()
+        initializer = initializers.get('glorot_uniform')
       # If dtype is DT_INT/DT_UINT, provide a default value `zero`
       # If dtype is DT_BOOL, provide a default value `FALSE`
       elif dtype.is_integer or dtype.is_unsigned or dtype.is_bool:
-        initializer = initializers.zeros()
+        initializer = initializers.get('zeros')
       # NOTES:Do we need to support for handling DT_STRING and DT_COMPLEX here?
       else:
         raise ValueError('An initializer for variable %s of type %s is required'
@@ -1306,34 +1310,29 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         collected_metrics.extend(layer._metrics)
     return collected_metrics
 
-  def add_metric(self, value, aggregation=None, name=None):
+  def add_metric(self, value, name=None, **kwargs):
     """Adds metric tensor to the layer.
 
     Args:
       value: Metric tensor.
-      aggregation: Sample-wise metric reduction function. If `aggregation=None`,
-        it indicates that the metric tensor provided has been aggregated
-        already. eg, `bin_acc = BinaryAccuracy(name='acc')` followed by
-        `model.add_metric(bin_acc(y_true, y_pred))`. If aggregation='mean', the
-        given metric tensor will be sample-wise reduced using `mean` function.
-        eg, `model.add_metric(tf.reduce_sum(outputs), name='output_mean',
-        aggregation='mean')`.
       name: String metric name.
-
-    Raises:
-      ValueError: If `aggregation` is anything other than None or `mean`.
+      **kwargs: Additional keyword arguments for backward compatibility.
+        Accepted values:
+        `aggregation` - When the `value` tensor provided is not the result of
+        calling a `keras.Metric` instance, it will be aggregated by default
+        using a `keras.Metric.Mean`.
     """
-    if aggregation is not None and aggregation != 'mean':
-      raise ValueError(
-          'We currently support only `mean` sample-wise metric aggregation. '
-          'You provided aggregation=`%s`' % aggregation)
+    kwargs_keys = list(kwargs.keys())
+    if (len(kwargs_keys) > 1 or
+        (len(kwargs_keys) == 1 and kwargs_keys[0] != 'aggregation')):
+      raise TypeError('Unknown keyword arguments: ', str(kwargs.keys()))
 
     from_metric_obj = hasattr(value, '_metric_obj')
     is_symbolic = tf_utils.is_symbolic_tensor(value)
     in_call_context = base_layer_utils.call_context().in_call
 
     if name is None and not from_metric_obj:
-      # Eg. `self.add_metric(math_ops.reduce_sum(x), aggregation='mean')`
+      # Eg. `self.add_metric(math_ops.reduce_sum(x))`
       # In eager mode, we use metric name to lookup a metric. Without a name,
       # a new Mean metric wrapper will be created on every model/layer call.
       # So, we raise an error when no name is provided.
@@ -1346,7 +1345,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       # model.add_metric(mean(outputs))
       raise ValueError('Please provide a name for your metric like '
                        '`self.add_metric(tf.reduce_sum(inputs), '
-                       'name=\'mean_activation\', aggregation=\'mean\')`')
+                       'name=\'mean_activation\')`')
     elif from_metric_obj:
       name = value._metric_obj.name
 
@@ -1357,7 +1356,28 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     # If a metric was added in a Layer's `call` or `build`.
     if in_call_context or not getattr(self, '_is_graph_network', False):
       # TF Function path should take the eager path.
-      self._add_metric(value, aggregation, name)
+
+      # If the given metric is available in `metrics` list we just update state
+      # on it, otherwise we create a new metric instance and
+      # add it to the `metrics` list.
+      metric_obj = getattr(value, '_metric_obj', None)
+      # Tensors that come from a Metric object already updated the Metric state.
+      should_update_state = not metric_obj
+      name = metric_obj.name if metric_obj else name
+
+      with self._metrics_lock:
+        match = self._get_existing_metric(name)
+        if match:
+          metric_obj = match
+        elif metric_obj:
+          self._metrics.append(metric_obj)
+        else:
+          from tensorflow.python.keras import metrics as metrics_mod  # pylint:disable=g-import-not-at-top
+          metric_obj = metrics_mod.Mean(name=name, dtype=value.dtype)
+          self._metrics.append(metric_obj)
+
+      if should_update_state:
+        metric_obj(value)
     else:
       if from_metric_obj:
         raise ValueError('Using the result of calling a `Metric` object '
@@ -1366,6 +1386,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
                          'Tensor to monitor directly.')
 
       # Insert layers into the Keras Graph Network.
+      aggregation = None if from_metric_obj else 'mean'
       self._graph_network_add_metric(value, aggregation, name)
 
   @deprecation.deprecated_args(None, '`inputs` is now automatically inferred',
@@ -2119,35 +2140,6 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
           'We found {} metrics with the name: "{}"'.format(len(match), name))
     return match[0]
 
-  def _add_metric(self, value, aggregation=None, name=None):
-    # If the given metric is available in `metrics` list we just update state
-    # on it, otherwise we create a new metric instance and
-    # add it to the `metrics` list.
-    metric_obj = getattr(value, '_metric_obj', None)
-    # Tensors that come from a Metric object already updated the Metric state.
-    should_update_state = not metric_obj
-    name = metric_obj.name if metric_obj else name
-
-    with self._metrics_lock:
-      match = self._get_existing_metric(name)
-      if match:
-        metric_obj = match
-      elif metric_obj:
-        self._metrics.append(metric_obj)
-      else:
-        from tensorflow.python.keras import metrics as metrics_mod  # pylint:disable=g-import-not-at-top
-        if aggregation is None:
-          raise ValueError(
-              '`aggregation` must be specified when passing a `Tensor` '
-              'to `add_metric`.')
-        assert aggregation is not None
-        metric_obj = metrics_mod.Mean(name=name, dtype=value.dtype)
-        self._metrics.append(metric_obj)
-
-    if should_update_state:
-      metric_obj(value)
-    return
-
   def _handle_weight_regularization(self, name, variable, regularizer):
     """Create lambdas which compute regularization losses."""
 
@@ -2368,8 +2360,15 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         else:
           self._dtype_policy = policy.Policy(dtype)
       input_shapes = None
+      # Converts Tensors / CompositeTensors to TensorShapes.
       if all(hasattr(x, 'shape') for x in input_list):
-        input_shapes = nest.map_structure(lambda x: x.shape, inputs)
+        input_shapes = tf_utils.get_shapes(inputs)
+      else:
+        # Converts input shape to TensorShapes.
+        try:
+          input_shapes = tf_utils.convert_shapes(inputs, to_tuples=False)
+        except ValueError:
+          pass
       # Only call `build` if the user has manually overridden the build method.
       if not hasattr(self.build, '_is_default'):
         # Any setup work performed only once should happen in an `init_scope`
@@ -2887,7 +2886,7 @@ class AddMetric(Layer):
     self.metric_name = metric_name
 
   def call(self, inputs):
-    self.add_metric(inputs, self.aggregation, self.metric_name)
+    self.add_metric(inputs, aggregation=self.aggregation, name=self.metric_name)
     return inputs
 
   def get_config(self):
